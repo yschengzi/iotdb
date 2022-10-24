@@ -285,6 +285,7 @@ public class BufferedPipeDataQueue implements PipeDataQueue {
     }
     outputDeque.addFirst(pipeData);
     pullSerialNumber = pipeData.getSerialNumber();
+    System.out.println(String.format("Take pipeData %s.", pullSerialNumber));
     return pipeData;
   }
 
@@ -298,6 +299,7 @@ public class BufferedPipeDataQueue implements PipeDataQueue {
 
   @Override
   public void commit(long serialNumber) {
+    System.out.println(String.format("Commit pipeData %s.", serialNumber));
     deletePipeData(serialNumber);
     deletePipeLog();
     serializeCommitSerialNumber();
