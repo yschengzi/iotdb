@@ -293,7 +293,11 @@ public class PipeTaskAgent {
     // add pipe meta to pipe meta keeper
     // note that we do not need to set the status of pipe meta here, because the status of pipe meta
     // is already set to STOPPED when it is created
-    pipeMetaKeeper.addPipeMeta(pipeName, pipeMeta);
+    pipeMetaKeeper.addPipeMeta(
+        pipeName,
+        new PipeMeta(
+            pipeMeta.getStaticMeta(),
+            new PipeRuntimeMeta(pipeMeta.getRuntimeMeta().getConsensusGroupIdToTaskMetaMap())));
   }
 
   private void dropPipe(String pipeName, long creationTime) {
