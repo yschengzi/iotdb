@@ -1408,6 +1408,7 @@ public class PlanExecutor implements IPlanExecutor {
     } else {
       loadFile(file, plan);
     }
+    cleanUpLoadingFile(plan.getFilePath());
   }
 
   private File getOrDownloadFile(String filePath) throws QueryProcessException {
@@ -1433,6 +1434,18 @@ public class PlanExecutor implements IPlanExecutor {
       logger.warn(String.format("Can not find loading file %s.", filePath), e);
       throw new QueryProcessException(
           String.format("Find loading file %s error, because of %s", filePath, e.getMessage()));
+    }
+  }
+
+  private void cleanUpLoadingFile(String filePath) {
+    try {
+      FileUtils.forceDelete(new File(filePath));
+    } catch (Exception e) {
+      try {
+        FileUtils.forceDelete(new File(new URI(filePath)));
+      } catch (Exception exception) {
+        logger.info(String.format("Remote file %s finish loading.", filePath));
+      }
     }
   }
 
