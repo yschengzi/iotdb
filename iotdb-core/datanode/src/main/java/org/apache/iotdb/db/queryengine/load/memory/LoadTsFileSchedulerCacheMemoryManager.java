@@ -19,10 +19,56 @@
 
 package org.apache.iotdb.db.queryengine.load.memory;
 
-public class LoadTsFileSchedulerCacheMemoryManager {
-  public void allocateMemory(long memoryBudgetInBytes) throws Exception {}
+import org.apache.iotdb.common.rpc.thrift.TEndPoint;
+import org.apache.iotdb.db.queryengine.plan.planner.plan.node.load.LoadTsFileNode;
 
-  public long tryAllocateMemory(long memoryBudgetInBytes) throws Exception {
-    return 0;
+import java.util.HashMap;
+import java.util.Map;
+
+// TODO: not complete
+public class LoadTsFileSchedulerCacheMemoryManager {
+
+  // todo: set init value
+  private long totalMemorySizeInBytes;
+  private long usedMemorySizeInBytes = 0;
+
+  private final Map<TEndPoint, LoadTsFileNode> dispatchCache;
+
+  public void add(TEndPoint endPoint, LoadTsFileNode loadTsFileNode) {
+    dispatchCache.put(endPoint, loadTsFileNode);
+  }
+
+  public LoadTsFileNode get(TEndPoint endPoint) {
+    return dispatchCache.get(endPoint);
+  }
+
+  public void remove(TEndPoint endPoint) {
+    dispatchCache.remove(endPoint);
+  }
+
+  public boolean contains(TEndPoint endPoint) {
+    return dispatchCache.containsKey(endPoint);
+  }
+
+  public void clear() {
+    dispatchCache.clear();
+  }
+
+  public boolean isEmpty() {
+    return dispatchCache.isEmpty();
+  }
+
+  ///////////////////////////// SINGLETON /////////////////////////////
+  private LoadTsFileSchedulerCacheMemoryManager() {
+    dispatchCache = new HashMap<>();
+  }
+
+  public static LoadTsFileSchedulerCacheMemoryManager getInstance() {
+    return LoadTsFileSchedulerCacheMemoryManagerHolder.INSTANCE;
+  }
+
+  public static class LoadTsFileSchedulerCacheMemoryManagerHolder {
+    private static final LoadTsFileSchedulerCacheMemoryManager INSTANCE =
+        new LoadTsFileSchedulerCacheMemoryManager();
   }
 }

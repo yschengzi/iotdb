@@ -45,6 +45,7 @@ import org.apache.iotdb.db.protocol.session.SessionManager;
 import org.apache.iotdb.db.queryengine.common.MPPQueryContext;
 import org.apache.iotdb.db.queryengine.common.schematree.DeviceSchemaInfo;
 import org.apache.iotdb.db.queryengine.common.schematree.ISchemaTree;
+import org.apache.iotdb.db.queryengine.load.memory.DeviceToTimeseriesSchemasMap;
 import org.apache.iotdb.db.queryengine.plan.Coordinator;
 import org.apache.iotdb.db.queryengine.plan.analyze.Analysis;
 import org.apache.iotdb.db.queryengine.plan.analyze.IPartitionFetcher;
@@ -252,8 +253,8 @@ public class LoadTsfileAnalyzer {
   private final class SchemaAutoCreatorAndVerifier {
 
     private final Map<String, Boolean> tsfileDevice2IsAligned = new HashMap<>();
-    private final Map<String, Set<MeasurementSchema>> currentBatchDevice2TimeseriesSchemas =
-        new HashMap<>();
+    private final DeviceToTimeseriesSchemasMap currentBatchDevice2TimeseriesSchemas =
+        DeviceToTimeseriesSchemasMap.getInstance();
 
     private final Set<PartialPath> alreadySetDatabases = new HashSet<>();
 
@@ -304,14 +305,13 @@ public class LoadTsfileAnalyzer {
             }
             final Pair<CompressionType, TSEncoding> compressionEncodingPair =
                 reader.readTimeseriesCompressionTypeAndEncoding(timeseriesMetadata);
-            currentBatchDevice2TimeseriesSchemas
-                .computeIfAbsent(device, o -> new HashSet<>())
-                .add(
-                    new MeasurementSchema(
-                        timeseriesMetadata.getMeasurementId(),
-                        dataType,
-                        compressionEncodingPair.getRight(),
-                        compressionEncodingPair.getLeft()));
+            currentBatchDevice2TimeseriesSchemas.add(
+                device,
+                new MeasurementSchema(
+                    timeseriesMetadata.getMeasurementId(),
+                    dataType,
+                    compressionEncodingPair.getRight(),
+                    compressionEncodingPair.getLeft()));
 
             tsfileDevice2IsAligned.putIfAbsent(device, false);
           }

@@ -19,4 +19,163 @@
 
 package org.apache.iotdb.db.queryengine.load.memory;
 
-public class LoadTsFileMemoryManager {}
+import org.apache.iotdb.db.conf.IoTDBConfig;
+import org.apache.iotdb.db.conf.IoTDBDescriptor;
+import org.apache.iotdb.db.queryengine.load.exception.LoadRuntimeOutOfMemoryException;
+import org.apache.iotdb.db.queryengine.load.memory.block.AbstractMemoryBlock;
+import org.apache.iotdb.db.queryengine.load.memory.block.LoadMemoryBlock;
+import org.apache.iotdb.db.queryengine.load.memory.block.QueryMemoryBlock;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.function.LongUnaryOperator;
+
+public class LoadTsFileMemoryManager {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(LoadTsFileMemoryManager.class);
+  private static final IoTDBConfig CONFIG = IoTDBDescriptor.getInstance().getConfig();
+  private long totalMemorySizeInBytes = CONFIG.getInitLoadMemoryTotalSizeInBytes();
+  private long usedMemorySizeInBytes;
+
+  private static final int MEMORY_ALLOCATE_MAX_RETRIES = CONFIG.getLoadMemoryAllocateMaxRetries();
+  private static final long MEMORY_ALLOCATE_RETRY_INTERVAL_IN_MS =
+      CONFIG.getLoadMemoryAllocateRetryIntervalMs();
+  private static final long MEMORY_ALLOCATE_MIN_SIZE_IN_BYTES =
+      CONFIG.getLoadMemoryAllocateMinSizeInBytes();
+
+  private final Set<AbstractMemoryBlock> allocatedBlocks = new HashSet<>();
+
+  private synchronized QueryMemoryBlock allocatedFromQuery(long sizeInBytes) {
+    // todo: queryEngine provides a method to allocate memory
+
+    totalMemorySizeInBytes += sizeInBytes;
+    return null;
+  }
+
+  public synchronized void releaseFromQuery(QueryMemoryBlock block) {
+    // todo: queryEngine provides a method to release memory
+
+    totalMemorySizeInBytes -= block.getMemoryUsageInBytes();
+  }
+
+  public synchronized LoadMemoryBlock forceAllocate(long sizeInBytes) {
+    for (int i = 0; i < MEMORY_ALLOCATE_MAX_RETRIES; i++) {
+      final long freeMemorySizeInBytes = totalMemorySizeInBytes - usedMemorySizeInBytes;
+      if (freeMemorySizeInBytes >= sizeInBytes) {
+        return registeredMemoryBlock(sizeInBytes);
+      }
+
+      // 1. allocate memory from queryEngine
+      QueryMemoryBlock allocatedBlock = allocatedFromQuery(sizeInBytes - freeMemorySizeInBytes);
+
+      if (totalMemorySizeInBytes - usedMemorySizeInBytes >= sizeInBytes) {
+        return registeredMemoryBlock(sizeInBytes, allocatedBlock);
+      }
+
+      try {
+        this.wait(MEMORY_ALLOCATE_RETRY_INTERVAL_IN_MS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        LOGGER.warn("forceAllocate: interrupted while waiting for available memory", e);
+      }
+    }
+
+    throw new LoadRuntimeOutOfMemoryException(
+        String.format(
+            "forceAllocate: failed to allocate memory after %d retries, "
+                + "total memory size %d bytes, used memory size %d bytes, "
+                + "requested memory size %d bytes",
+            MEMORY_ALLOCATE_MAX_RETRIES,
+            totalMemorySizeInBytes,
+            usedMemorySizeInBytes,
+            sizeInBytes));
+  }
+
+  public synchronized AbstractMemoryBlock tryAllocate(long sizeInBytes) {
+    return tryAllocate(sizeInBytes, currentSize -> currentSize * 2 / 3);
+  }
+
+  public synchronized AbstractMemoryBlock tryAllocate(
+      long sizeInBytes, LongUnaryOperator customAllocateStrategy) {
+    if (totalMemorySizeInBytes - usedMemorySizeInBytes >= sizeInBytes) {
+      return registeredMemoryBlock(sizeInBytes);
+    }
+
+    long sizeToAllocateInBytes = sizeInBytes;
+    while (sizeToAllocateInBytes > MEMORY_ALLOCATE_MIN_SIZE_IN_BYTES) {
+      // 1. allocate memory from queryEngine
+      QueryMemoryBlock queryMemoryBlock = allocatedFromQuery(sizeToAllocateInBytes);
+
+      if (totalMemorySizeInBytes - usedMemorySizeInBytes >= sizeToAllocateInBytes) {
+        LOGGER.info(
+            "tryAllocate: allocated memory, "
+                + "total memory size {} bytes, used memory size {} bytes, "
+                + "original requested memory size {} bytes,"
+                + "actual requested memory size {} bytes",
+            totalMemorySizeInBytes,
+            usedMemorySizeInBytes,
+            sizeInBytes,
+            sizeToAllocateInBytes);
+        return registeredMemoryBlock(sizeToAllocateInBytes, queryMemoryBlock);
+      }
+
+      sizeToAllocateInBytes =
+          Math.max(
+              customAllocateStrategy.applyAsLong(sizeToAllocateInBytes),
+              MEMORY_ALLOCATE_MIN_SIZE_IN_BYTES);
+    }
+
+    LOGGER.warn(
+        "tryAllocate: failed to allocate memory, "
+            + "total memory size {} bytes, used memory size {} bytes, "
+            + "requested memory size {} bytes",
+        totalMemorySizeInBytes,
+        usedMemorySizeInBytes,
+        sizeInBytes);
+    return registeredMemoryBlock(0);
+  }
+
+  private LoadMemoryBlock registeredMemoryBlock(long sizeInBytes) {
+    return registeredMemoryBlock(sizeInBytes, null);
+  }
+
+  private LoadMemoryBlock registeredMemoryBlock(long sizeInBytes, QueryMemoryBlock queryBlock) {
+    usedMemorySizeInBytes += sizeInBytes;
+
+    final LoadMemoryBlock returnedMemoryBlock = new LoadMemoryBlock(sizeInBytes, queryBlock);
+    allocatedBlocks.add(returnedMemoryBlock);
+    return returnedMemoryBlock;
+  }
+
+  public synchronized void release(LoadMemoryBlock block) {
+    if (block == null || block.isReleased()) {
+      return;
+    }
+
+    // 1. release memory to queryEngine
+    if (block.getQueryMemoryBlock() != null) {
+      releaseFromQuery(block.getQueryMemoryBlock());
+    }
+
+    // 2. release memory to loadMemoryManager
+    allocatedBlocks.remove(block);
+    usedMemorySizeInBytes -= block.getMemoryUsageInBytes();
+    block.markAsReleased();
+
+    this.notifyAll();
+  }
+
+  ///////////////////////////// SINGLETON /////////////////////////////
+  private LoadTsFileMemoryManager() {}
+
+  public static LoadTsFileMemoryManager getInstance() {
+    return LoadTsFileMemoryManagerHolder.INSTANCE;
+  }
+
+  public static class LoadTsFileMemoryManagerHolder {
+    private static final LoadTsFileMemoryManager INSTANCE = new LoadTsFileMemoryManager();
+  }
+}
