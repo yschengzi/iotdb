@@ -37,6 +37,9 @@ public class LoadTsFileMemoryManager {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(LoadTsFileMemoryManager.class);
   private static final IoTDBConfig CONFIG = IoTDBDescriptor.getInstance().getConfig();
+
+  // TODO: remove queryTotalMemorySizeInBytes after introducing queryEngine.allocate()
+  private long queryTotalMemorySizeInBytes = CONFIG.getLoadMemoryTotalSizeFromQueryInBytes();
   private long totalMemorySizeInBytes = CONFIG.getInitLoadMemoryTotalSizeInBytes();
   private long usedMemorySizeInBytes;
 
@@ -50,31 +53,38 @@ public class LoadTsFileMemoryManager {
 
   private synchronized QueryMemoryBlock allocatedFromQuery(long sizeInBytes) {
     // todo: queryEngine provides a method to allocate memory
-
-    totalMemorySizeInBytes += sizeInBytes;
-    return null;
+    if (queryTotalMemorySizeInBytes >= totalMemorySizeInBytes) {
+      totalMemorySizeInBytes += sizeInBytes;
+      return new QueryMemoryBlock(sizeInBytes);
+    } else {
+      return new QueryMemoryBlock(0);
+    }
   }
 
   public synchronized void releaseFromQuery(QueryMemoryBlock block) {
     // todo: queryEngine provides a method to release memory
+    if (block == null || block.isReleased()) {
+      return;
+    }
 
     totalMemorySizeInBytes -= block.getMemoryUsageInBytes();
   }
 
   public synchronized LoadMemoryBlock forceAllocate(long sizeInBytes) {
     for (int i = 0; i < MEMORY_ALLOCATE_MAX_RETRIES; i++) {
+      // 1. check if there is enough memory in loadMemoryManager
       final long freeMemorySizeInBytes = totalMemorySizeInBytes - usedMemorySizeInBytes;
       if (freeMemorySizeInBytes >= sizeInBytes) {
         return registeredMemoryBlock(sizeInBytes);
       }
 
-      // 1. allocate memory from queryEngine
+      // 2. allocate memory from queryEngine
       QueryMemoryBlock allocatedBlock = allocatedFromQuery(sizeInBytes - freeMemorySizeInBytes);
-
       if (totalMemorySizeInBytes - usedMemorySizeInBytes >= sizeInBytes) {
         return registeredMemoryBlock(sizeInBytes, allocatedBlock);
       }
 
+      // 3. wait for available memory
       try {
         this.wait(MEMORY_ALLOCATE_RETRY_INTERVAL_IN_MS);
       } catch (InterruptedException e) {
@@ -100,15 +110,17 @@ public class LoadTsFileMemoryManager {
 
   public synchronized AbstractMemoryBlock tryAllocate(
       long sizeInBytes, LongUnaryOperator customAllocateStrategy) {
+
+    // 1. check if there is enough memory in loadMemoryManager
     if (totalMemorySizeInBytes - usedMemorySizeInBytes >= sizeInBytes) {
       return registeredMemoryBlock(sizeInBytes);
     }
 
+    // 2. try to allocate memory
     long sizeToAllocateInBytes = sizeInBytes;
     while (sizeToAllocateInBytes > MEMORY_ALLOCATE_MIN_SIZE_IN_BYTES) {
-      // 1. allocate memory from queryEngine
+      // 2.1 allocate memory from queryEngine
       QueryMemoryBlock queryMemoryBlock = allocatedFromQuery(sizeToAllocateInBytes);
-
       if (totalMemorySizeInBytes - usedMemorySizeInBytes >= sizeToAllocateInBytes) {
         LOGGER.info(
             "tryAllocate: allocated memory, "
@@ -120,6 +132,8 @@ public class LoadTsFileMemoryManager {
             sizeInBytes,
             sizeToAllocateInBytes);
         return registeredMemoryBlock(sizeToAllocateInBytes, queryMemoryBlock);
+      } else {
+        releaseFromQuery(queryMemoryBlock);
       }
 
       sizeToAllocateInBytes =

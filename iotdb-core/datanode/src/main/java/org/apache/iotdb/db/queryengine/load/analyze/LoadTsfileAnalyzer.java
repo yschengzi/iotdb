@@ -178,6 +178,7 @@ public class LoadTsfileAnalyzer {
     }
 
     LOGGER.info("Load - Analysis Stage: all tsfiles have been analyzed.");
+    schemaAutoCreatorAndVerifier.close();
 
     // data partition will be queried in the scheduler
     final Analysis analysis = new Analysis();
@@ -254,7 +255,7 @@ public class LoadTsfileAnalyzer {
 
     private final Map<String, Boolean> tsfileDevice2IsAligned = new HashMap<>();
     private final DeviceToTimeseriesSchemasMap currentBatchDevice2TimeseriesSchemas =
-        DeviceToTimeseriesSchemasMap.getInstance();
+        new DeviceToTimeseriesSchemasMap();
 
     private final Set<PartialPath> alreadySetDatabases = new HashSet<>();
 
@@ -264,6 +265,7 @@ public class LoadTsfileAnalyzer {
         TsFileSequenceReader reader,
         Map<String, List<TimeseriesMetadata>> device2TimeseriesMetadataList)
         throws IOException, AuthException {
+      boolean isReachedMaxMemorySize = false;
       for (final Map.Entry<String, List<TimeseriesMetadata>> entry :
           device2TimeseriesMetadataList.entrySet()) {
         final String device = entry.getKey();
@@ -305,15 +307,21 @@ public class LoadTsfileAnalyzer {
             }
             final Pair<CompressionType, TSEncoding> compressionEncodingPair =
                 reader.readTimeseriesCompressionTypeAndEncoding(timeseriesMetadata);
-            currentBatchDevice2TimeseriesSchemas.add(
-                device,
-                new MeasurementSchema(
-                    timeseriesMetadata.getMeasurementId(),
-                    dataType,
-                    compressionEncodingPair.getRight(),
-                    compressionEncodingPair.getLeft()));
+            isReachedMaxMemorySize =
+                currentBatchDevice2TimeseriesSchemas.add(
+                    device,
+                    new MeasurementSchema(
+                        timeseriesMetadata.getMeasurementId(),
+                        dataType,
+                        compressionEncodingPair.getRight(),
+                        compressionEncodingPair.getLeft()));
 
             tsfileDevice2IsAligned.putIfAbsent(device, false);
+          }
+
+          if (isReachedMaxMemorySize) {
+            flush();
+            isReachedMaxMemorySize = false;
           }
         }
       }
@@ -614,6 +622,12 @@ public class LoadTsfileAnalyzer {
     public void clear() {
       tsfileDevice2IsAligned.clear();
       currentBatchDevice2TimeseriesSchemas.clear();
+      alreadySetDatabases.clear();
+    }
+
+    public void close() {
+      tsfileDevice2IsAligned.clear();
+      currentBatchDevice2TimeseriesSchemas.close();
       alreadySetDatabases.clear();
     }
   }

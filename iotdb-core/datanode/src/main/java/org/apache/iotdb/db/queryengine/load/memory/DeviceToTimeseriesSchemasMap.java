@@ -35,21 +35,32 @@ public class DeviceToTimeseriesSchemasMap {
   private final LoadMemoryBlock block;
 
   private long totalMemorySizeInBytes =
-      IoTDBDescriptor.getInstance().getConfig().getInitLoadMemoryTotalSizeInBytes() / 2;
+      IoTDBDescriptor.getInstance().getConfig().getInitLoadMemoryTotalSizeInBytes() / 10;
   private long usedMemorySizeInBytes = 0;
 
   private final Map<String, Set<MeasurementSchema>> currentBatchDevice2TimeseriesSchemas =
       new HashMap<>();
 
-  // true if the memory is still enough and the schema is added successfully, false when it is out
+  public DeviceToTimeseriesSchemasMap() {
+    block = loadTsFileMemoryManager.forceAllocate(totalMemorySizeInBytes);
+  }
+
+  // false if the memory is still enough and the schema is added successfully, true when it is out
   // of memory.
   public boolean add(String device, MeasurementSchema measurementSchema) {
+    boolean isNewDevice = !currentBatchDevice2TimeseriesSchemas.containsKey(device);
+
     currentBatchDevice2TimeseriesSchemas
         .computeIfAbsent(device, k -> new HashSet<>())
         .add(measurementSchema);
 
+    if (isNewDevice) {
+      // estimate the memory size of a new hashmap node and a hash set
+      usedMemorySizeInBytes += (100);
+    }
     usedMemorySizeInBytes += measurementSchema.serializedSize();
-    return usedMemorySizeInBytes <= totalMemorySizeInBytes;
+
+    return usedMemorySizeInBytes > totalMemorySizeInBytes;
   }
 
   public void clear() {
@@ -69,23 +80,10 @@ public class DeviceToTimeseriesSchemasMap {
     return currentBatchDevice2TimeseriesSchemas.keySet();
   }
 
-  public void distory() {
+  public void close() {
     currentBatchDevice2TimeseriesSchemas.clear();
     totalMemorySizeInBytes = 0;
     usedMemorySizeInBytes = 0;
     loadTsFileMemoryManager.release(block);
-  }
-
-  ///////////////////////////// SINGLETON /////////////////////////////
-  private DeviceToTimeseriesSchemasMap() {
-    block = loadTsFileMemoryManager.forceAllocate(totalMemorySizeInBytes);
-  }
-
-  public static DeviceToTimeseriesSchemasMap getInstance() {
-    return LoadTsFileAnalyzerMemoryManagerHolder.INSTANCE;
-  }
-
-  public static class LoadTsFileAnalyzerMemoryManagerHolder {
-    private static final DeviceToTimeseriesSchemasMap INSTANCE = new DeviceToTimeseriesSchemasMap();
   }
 }
